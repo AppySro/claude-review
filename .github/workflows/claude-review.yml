@@ -40,6 +40,26 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Hide the PR's title and description from the reviewer
+        # The event payload holds the PR title and description, and the
+        # reviewer's Read tool can open any absolute path. Blank both.
+        env:
+          EVENT: ${{ github.event_path }}
+        run: |
+          jq '.pull_request.body = "" | .pull_request.title = ""' "$EVENT" > "$RUNNER_TEMP/event.json"
+          mv "$RUNNER_TEMP/event.json" "$EVENT"
+
+      - name: List recently merged PRs for the reviewer
+        # Prepared here so the reviewer needs no `gh pr list`, which could
+        # also return this PR's description and comments.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr list --repo "$REPO" --state merged --base "$BASE" --limit 15 \
+            --json number,title,mergedAt,files > "$RUNNER_TEMP/merged-prs.json"
+
       - name: Review
         # Pinned to the commit of release v1.0.275, not a moving tag.
         uses: anthropics/claude-code-action@4d75e5f390ee76b2e09c1980ecc99ff3a2e088c8 # v1.0.275
@@ -62,9 +82,9 @@ jobs:
             1. `gh pr diff ${{ github.event.pull_request.number }}` to get the change.
             2. Read the surrounding code in the checkout (Read, Grep, Glob) to
                confirm each suspicion: callers, guards, migrations, tests.
-            3. `gh pr list --state merged --base ${{ github.event.pull_request.base.ref }} --limit 15 --json number,title,mergedAt,files`
-               to see recently merged PRs, and `gh pr diff <number>` for any
-               that touch the same files. Check whether this diff conflicts
+            3. Read `${{ runner.temp }}/merged-prs.json` (recently merged PRs
+               with their files), and `gh pr diff <number>` for any that
+               touch the same files. Check whether this diff conflicts
                with, undoes, or duplicates them.
 
             Look for, in this order:
@@ -99,10 +119,12 @@ jobs:
 
             You must not approve, request changes, merge, push, commit, edit
             files, or change labels. You only comment.
-          # git log/show are not allowed: they would reveal the PR's own
-          # commit messages. Merged PRs are read through gh pr list/diff.
+          # Everything that could show the PR's own description, comments or
+          # commit messages is denied: git, gh pr view/list/checks, gh issue
+          # (a PR is also an issue), gh search, gh api, and raw HTTP.
+          # Deny rules win over allow rules.
           claude_args: >-
             --allowedTools
-            "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*)"
+            "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr comment:*)"
             --disallowedTools
-            "Edit,Write,NotebookEdit,WebFetch,WebSearch,Bash(git:*),Bash(gh pr view:*),Bash(gh pr review:*),Bash(gh pr merge:*),Bash(gh pr edit:*),Bash(gh pr close:*),Bash(gh api:*)"
+            "Edit,Write,NotebookEdit,WebFetch,WebSearch,Bash(git:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh pr merge:*),Bash(gh pr edit:*),Bash(gh pr close:*),Bash(gh issue:*),Bash(gh search:*),Bash(gh api:*),Bash(curl:*),Bash(wget:*)"

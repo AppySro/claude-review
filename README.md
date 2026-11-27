@@ -29,10 +29,11 @@ permissions: {}
 
 jobs:
   review:
-    # Skip drafts and PRs from forks.
+    # Skip drafts, PRs from forks, and Dependabot (it gets no Actions secrets).
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
     permissions:
       contents: read
       pull-requests: write
@@ -41,7 +42,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-3. Optional (paid plan): require the **Claude review / Claude review** check in branch protection.
+3. Optional (paid plan): require the **review / Claude review** check (caller job / called job) in branch protection.
 
 ## Changing the review
 
