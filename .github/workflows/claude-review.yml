@@ -167,3 +167,13 @@ jobs:
             "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*)"
             --disallowedTools
             "Edit,Write,NotebookEdit,WebFetch,WebSearch,Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh pr merge:*),Bash(gh pr edit:*),Bash(gh pr close:*),Bash(gh issue:*),Bash(gh search:*),Bash(gh api:*),Bash(curl:*),Bash(wget:*)"
+
+      - name: Show why the review failed
+        # The action hides Claude's output (this repository's logs are
+        # public). On failure, print only the error text, not the review.
+        if: failure()
+        run: |
+          f="$RUNNER_TEMP/claude-execution-output.json"
+          [ -f "$f" ] || { echo "No execution file: the review did not start."; exit 0; }
+          jq -r '.[] | select(.type == "result") | "result: \(.result // "-" | tostring | .[0:500])"' "$f"
+          jq -r '.[] | select(.error != null) | "error (\(.type)): \(.error | tostring | .[0:300])"' "$f"
