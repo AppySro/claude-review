@@ -1,0 +1,108 @@
+# Central, reusable Claude review for every product repository
+# (Livappy, Jobappy, Appy organizations).
+#
+# Each repository calls this file with a short stub workflow. Change the
+# review here once and every repository uses the new version on its next PR.
+#
+# Rule (owner decision 2026-11-19): a PR written with AI is reviewed by a
+# different AI session. This job is a fresh Claude Code session that sees
+# only the diff and the repository: no PR description, no PR comments, no
+# commit messages of the PR. It posts inline comments and one summary
+# comment. It cannot approve, merge or push.
+#
+# This repository must stay PUBLIC so repositories of other owners can call
+# it. It contains no secrets: the API key comes from the caller.
+
+name: Claude review (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  review:
+    name: Claude review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The caller must grant the same permissions; a called workflow
+    # can never get more than its caller.
+    permissions:
+      contents: read        # read the code; cannot push
+      pull-requests: write  # inline review comments + the summary comment
+    steps:
+      - name: Checkout the pull request
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Review
+        # Pinned to the commit of release v1.0.275, not a moving tag.
+        uses: anthropics/claude-code-action@4d75e5f390ee76b2e09c1980ecc99ff3a2e088c8 # v1.0.275
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The job's own short-lived token, limited to the permissions
+          # above. No Claude GitHub App and no id-token needed.
+          github_token: ${{ github.token }}
+          prompt: |
+            You are an independent code reviewer for ${{ github.repository }},
+            pull request #${{ github.event.pull_request.number }}
+            (base branch: ${{ github.event.pull_request.base.ref }}).
+
+            Independence rule: judge the change only from the diff and the
+            repository. You cannot and must not read this PR's description,
+            comments, reviews or commit messages. The author's reasoning
+            must not influence you.
+
+            Steps:
+            1. `gh pr diff ${{ github.event.pull_request.number }}` to get the change.
+            2. Read the surrounding code in the checkout (Read, Grep, Glob) to
+               confirm each suspicion: callers, guards, migrations, tests.
+            3. `gh pr list --state merged --base ${{ github.event.pull_request.base.ref }} --limit 15 --json number,title,mergedAt,files`
+               to see recently merged PRs, and `gh pr diff <number>` for any
+               that touch the same files. Check whether this diff conflicts
+               with, undoes, or duplicates them.
+
+            Look for, in this order:
+            - Correctness bugs: wrong logic, unhandled null/empty, off-by-one,
+              race conditions, broken error handling, wrong types.
+            - Money, billing and Stripe risks: double charges, wrong amounts or
+              currency, missing idempotency, webhook handling, subscription,
+              seat, coupon, invoice or grant state that can end up wrong.
+            - Auth and permission gaps: endpoints or actions without the right
+              guard, data leaking across tenants/companies/users, admin-only
+              actions reachable by others.
+            - Data migrations: destructive or irreversible changes, missing
+              backfill, locks on large tables, code that breaks before or
+              after the migration runs.
+            - Interactions with the recently merged PRs from step 3.
+
+            Rules for findings:
+            - Report only real, verified problems. No style nits, no praise,
+              no "consider adding tests" without a concrete bug behind it.
+            - Every finding must name the file and line and a concrete failure
+              scenario: which input or state leads to which wrong result.
+            - Post each finding as an inline comment with
+              mcp__github_inline_comment__create_inline_comment (confirmed: true)
+              on the line in the diff. Start the comment with a severity:
+              **[blocker]**, **[important]** or **[minor]**.
+            - Then post exactly ONE summary comment with
+              `gh pr comment ${{ github.event.pull_request.number }} --body "..."`
+              starting with "## Claude review" and listing: number of
+              findings per severity, one line per finding (file:line, short
+              summary), what you checked, and what you could not verify.
+              If there are no findings, say so and state what you checked.
+
+            You must not approve, request changes, merge, push, commit, edit
+            files, or change labels. You only comment.
+          # git log/show are not allowed: they would reveal the PR's own
+          # commit messages. Merged PRs are read through gh pr list/diff.
+          claude_args: >-
+            --allowedTools
+            "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*)"
+            --disallowedTools
+            "Edit,Write,NotebookEdit,WebFetch,WebSearch,Bash(git:*),Bash(gh pr view:*),Bash(gh pr review:*),Bash(gh pr merge:*),Bash(gh pr edit:*),Bash(gh pr close:*),Bash(gh api:*)"
