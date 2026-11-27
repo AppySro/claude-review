@@ -1,0 +1,179 @@
+# Central, reusable Claude review for the repositories of AppySro.
+# Livappy and Jobappy are separate businesses with their own copies.
+#
+# Each repository calls this file with a short stub workflow. Change the
+# review here once and every repository uses the new version on its next PR.
+#
+# Rule (owner decision 2026-11-19): a PR written with AI is reviewed by a
+# different AI session. This job is a fresh Claude Code session that sees
+# only the diff and the repository: no PR description, no PR comments, no
+# commit messages of the PR. It posts inline comments and one summary
+# comment. It cannot approve, merge or push.
+#
+# Repositories call it with a short stub workflow (see README). It holds no
+# secrets: the credential comes from the caller.
+
+name: Claude review (reusable)
+
+on:
+  workflow_call:
+    # Pass exactly ONE of these (see README):
+    #   ANTHROPIC_API_KEY        - Console API key, billed per token,
+    #                              per-company workspace and spend limit
+    #   CLAUDE_CODE_OAUTH_TOKEN  - Claude Pro/Max subscription token from
+    #                              `claude setup-token`; uses the plan's limits
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  review:
+    name: Claude review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The caller must grant the same permissions; a called workflow
+    # can never get more than its caller.
+    permissions:
+      contents: read        # read the code; cannot push
+      pull-requests: write  # inline review comments + the summary comment
+    steps:
+      - name: Checkout the pull request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (Node 24)
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Hide the PR's title and description from the reviewer
+        # The event payload holds the PR title and description, and the
+        # reviewer's Read tool can open any absolute path. Blank both.
+        env:
+          EVENT: ${{ github.event_path }}
+        run: |
+          jq '.pull_request.body = "" | .pull_request.title = ""' "$EVENT" > "$RUNNER_TEMP/event.json"
+          mv "$RUNNER_TEMP/event.json" "$EVENT"
+
+      - name: Remove agent configuration the PR could use to steer its review
+        # Claude Code loads CLAUDE.md, .claude/ settings and .mcp.json from
+        # the checkout. A PR could add or change them to influence its own
+        # review. They stay visible in the diff; only the live copies go.
+        run: |
+          find . -path ./.git -prune -o \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name .mcp.json \) -print -exec rm -f {} +
+          find . -path ./.git -prune -o -type d -name .claude -print -exec rm -rf {} +
+
+      - name: Prepare the diff and recently merged PRs for the reviewer
+        # Prepared here so the reviewer needs no GitHub command that could
+        # show this PR's description, comments or commit messages
+        # (`gh pr diff --patch` includes commit messages).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p .review-input
+          gh pr diff "$PR" --repo "$REPO" > .review-input/pr.diff
+          gh pr diff "$PR" --repo "$REPO" --name-only > .review-input/pr-files.txt
+          gh pr list --repo "$REPO" --state merged --base "$BASE" --limit 15 \
+            --json number,title,mergedAt,files > .review-input/merged-prs.json
+          # Diffs of recently merged PRs that touch the same files.
+          jq -r --rawfile f .review-input/pr-files.txt \
+            '($f | split("\n") | map(select(length > 0))) as $mine
+             | .[] | select([.files[].path] | any(. as $p | $mine | index($p))) | .number' \
+            .review-input/merged-prs.json |
+          while read -r n; do
+            gh pr diff "$n" --repo "$REPO" > ".review-input/merged-$n.diff" || true
+          done
+          ls -la .review-input
+
+      - name: Review
+        # Pinned to the commit of release v1.0.275, not a moving tag.
+        uses: anthropics/claude-code-action@4d75e5f390ee76b2e09c1980ecc99ff3a2e088c8 # v1.0.275
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The job's own short-lived token, limited to the permissions
+          # above. No Claude GitHub App and no id-token needed.
+          github_token: ${{ github.token }}
+          prompt: |
+            You are an independent code reviewer for ${{ github.repository }},
+            pull request #${{ github.event.pull_request.number }}
+            (base branch: ${{ github.event.pull_request.base.ref }}).
+
+            Independence rule: judge the change only from the diff and the
+            repository. You cannot and must not read this PR's description,
+            comments, reviews or commit messages. The author's reasoning
+            must not influence you.
+
+            Inputs (already prepared in `.review-input/`, which is not part
+            of the repository):
+            - `pr.diff`: the change to review. `pr-files.txt`: its files.
+            - `merged-prs.json`: recently merged PRs with their files.
+            - `merged-<number>.diff`: diffs of merged PRs that touch the
+              same files as this PR.
+            CLAUDE.md, .claude/ and .mcp.json were removed from the checkout
+            before the review; judge changes to them from `pr.diff`.
+
+            Steps:
+            1. Read `.review-input/pr.diff`.
+            2. Read the surrounding code in the checkout (Read, Grep, Glob) to
+               confirm each suspicion: callers, guards, migrations, tests.
+            3. Read the merged-PR files and check whether this diff
+               conflicts with, undoes, or duplicates them.
+
+            Look for, in this order:
+            - Correctness bugs: wrong logic, unhandled null/empty, off-by-one,
+              race conditions, broken error handling, wrong types.
+            - Money, billing and Stripe risks: double charges, wrong amounts or
+              currency, missing idempotency, webhook handling, subscription,
+              seat, coupon, invoice or grant state that can end up wrong.
+            - Auth and permission gaps: endpoints or actions without the right
+              guard, data leaking across tenants/companies/users, admin-only
+              actions reachable by others.
+            - Data migrations: destructive or irreversible changes, missing
+              backfill, locks on large tables, code that breaks before or
+              after the migration runs.
+            - Interactions with the recently merged PRs from step 3.
+
+            Rules for findings:
+            - Report only real, verified problems. No style nits, no praise,
+              no "consider adding tests" without a concrete bug behind it.
+            - Every finding must name the file and line and a concrete failure
+              scenario: which input or state leads to which wrong result.
+            - Post each finding as an inline comment with
+              mcp__github_inline_comment__create_inline_comment (confirmed: true)
+              on the line in the diff. Start the comment with a severity:
+              **[blocker]**, **[important]** or **[minor]**.
+            - Then post exactly ONE summary comment with
+              `gh pr comment ${{ github.event.pull_request.number }} --body "..."`
+              starting with "## Claude review" and listing: number of
+              findings per severity, one line per finding (file:line, short
+              summary), what you checked, and what you could not verify.
+              If there are no findings, say so and state what you checked.
+
+            You must not approve, request changes, merge, push, commit, edit
+            files, or change labels. You only comment.
+          # dontAsk: anything not on --allowedTools is refused, instead of
+          # being judged by auto mode (which let read-only shell commands
+          # such as cat or ls through). The only shell command left is
+          # posting the summary comment.
+          settings: '{"permissions":{"defaultMode":"dontAsk"}}'
+          # The deny list is a second layer: deny rules win over allow rules.
+          claude_args: >-
+            --allowedTools
+            "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*)"
+            --disallowedTools
+            "Edit,Write,NotebookEdit,WebFetch,WebSearch,Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh pr merge:*),Bash(gh pr edit:*),Bash(gh pr close:*),Bash(gh issue:*),Bash(gh search:*),Bash(gh api:*),Bash(curl:*),Bash(wget:*)"
+
+      - name: Show why the review failed
+        # The action hides Claude's output (this repository's logs are
+        # public). On failure, print only the error text, not the review.
+        if: failure()
+        run: |
+          f="$RUNNER_TEMP/claude-execution-output.json"
+          [ -f "$f" ] || { echo "No execution file: the review did not start."; exit 0; }
+          jq -r '.[] | select(.type == "result") | "result: \(.result // "-" | tostring | .[0:500])"' "$f"
+          jq -r '.[] | select(.error != null) | "error (\(.type)): \(.error | tostring | .[0:300])"' "$f"
