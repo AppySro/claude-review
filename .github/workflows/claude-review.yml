@@ -17,9 +17,16 @@ name: Claude review (reusable)
 
 on:
   workflow_call:
+    # Pass exactly ONE of these (see README):
+    #   ANTHROPIC_API_KEY        - Console API key, billed per token,
+    #                              per-company workspace and spend limit
+    #   CLAUDE_CODE_OAUTH_TOKEN  - Claude Pro/Max subscription token from
+    #                              `claude setup-token`; uses the plan's limits
     secrets:
       ANTHROPIC_API_KEY:
-        required: true
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
 
 permissions: {}
 
@@ -65,6 +72,7 @@ jobs:
         uses: anthropics/claude-code-action@4d75e5f390ee76b2e09c1980ecc99ff3a2e088c8 # v1.0.275
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The job's own short-lived token, limited to the permissions
           # above. No Claude GitHub App and no id-token needed.
           github_token: ${{ github.token }}

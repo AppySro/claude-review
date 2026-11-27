@@ -10,7 +10,11 @@ This repository is **public** on purpose: GitHub lets repositories of other owne
 
 ## Add the review to a repository
 
-1. Add the secret `ANTHROPIC_API_KEY` (organization secret, or repository secret on a personal account).
+1. Add **one** credential as a secret (organization secret, or repository secret on a personal account or for private repositories on GitHub Free):
+   - `ANTHROPIC_API_KEY`: an API key from Claude Console. Billed per token. Use one Console workspace per company, with a spend limit.
+   - `CLAUDE_CODE_OAUTH_TOKEN`: a Claude Pro/Max subscription token, created locally with `claude setup-token`. No per-token bill, but reviews share the subscription's usage limits with your own Claude work, and the token is tied to one person's account.
+
+   Set only one of them per repository.
 2. Add `.github/workflows/claude-review.yml` to the repository:
 
 ```yaml
@@ -40,6 +44,7 @@ jobs:
     uses: AppySro/claude-review/.github/workflows/claude-review.yml@main
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
 3. Optional (paid plan): require the **review / Claude review** check (caller job / called job) in branch protection.
