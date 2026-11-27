@@ -1,5 +1,5 @@
-# Central, reusable Claude review for every product repository
-# (Livappy, Jobappy, Appy organizations).
+# Central, reusable Claude review for the repositories of AppySro.
+# Livappy and Jobappy are separate businesses with their own copies.
 #
 # Each repository calls this file with a short stub workflow. Change the
 # review here once and every repository uses the new version on its next PR.
@@ -10,8 +10,8 @@
 # commit messages of the PR. It posts inline comments and one summary
 # comment. It cannot approve, merge or push.
 #
-# This repository must stay PUBLIC so repositories of other owners can call
-# it. It contains no secrets: the API key comes from the caller.
+# Repositories call it with a short stub workflow (see README). It holds no
+# secrets: the credential comes from the caller.
 
 name: Claude review (reusable)
 
